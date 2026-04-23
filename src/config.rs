@@ -74,8 +74,8 @@ impl From<ArgsCommitment> for CommitmentLevel {
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SubscribeType {
-    Account,
     #[default]
+    Account,
     Transaction,
 }
 
@@ -125,7 +125,7 @@ impl ConfigToml {
                 transactions: 1000,
                 account: "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA".to_string(),
                 commitment: ArgsCommitment::Processed,
-                subscribe_type: SubscribeType::Transaction,
+                subscribe_type: SubscribeType::Account,
             },
             endpoint: vec![
                 Endpoint {
