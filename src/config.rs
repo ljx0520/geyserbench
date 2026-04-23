@@ -16,6 +16,8 @@ pub struct Config {
     pub transactions: i32,
     pub account: String,
     pub commitment: ArgsCommitment,
+    #[serde(default)]
+    pub subscribe_type: SubscribeType,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -69,6 +71,23 @@ impl From<ArgsCommitment> for CommitmentLevel {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SubscribeType {
+    Account,
+    #[default]
+    Transaction,
+}
+
+impl SubscribeType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SubscribeType::Account => "account",
+            SubscribeType::Transaction => "transaction",
+        }
+    }
+}
+
 impl ArgsCommitment {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -106,6 +125,7 @@ impl ConfigToml {
                 transactions: 1000,
                 account: "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA".to_string(),
                 commitment: ArgsCommitment::Processed,
+                subscribe_type: SubscribeType::Transaction,
             },
             endpoint: vec![
                 Endpoint {

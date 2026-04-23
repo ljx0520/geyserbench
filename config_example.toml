@@ -2,6 +2,7 @@
 transactions = 1000
 account = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
 commitment = "processed"
+subscribe_type = "transaction"
 
 [[endpoint]]
 name = "Endpoint 1"

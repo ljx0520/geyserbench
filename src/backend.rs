@@ -117,6 +117,7 @@ struct BackendConfigPayload {
     transactions: u32,
     account: String,
     commitment: String,
+    subscribe_type: String,
 }
 
 #[derive(Serialize)]
@@ -552,6 +553,7 @@ impl BackendConfigPayload {
             transactions: config.transactions.max(0) as u32,
             account: config.account.clone(),
             commitment: config.commitment.as_str().to_string(),
+            subscribe_type: config.subscribe_type.as_str().to_string(),
         }
     }
 }
