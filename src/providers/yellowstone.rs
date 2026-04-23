@@ -7,7 +7,7 @@ use tonic::transport::ClientTlsConfig;
 use tracing::{Level, error, info, warn};
 
 use crate::proto::geyser::{
-    CommitmentLevel, SubscribeRequest, SubscribeRequestFilterTransactions, SubscribeRequestPing,
+    CommitmentLevel, SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestPing,
     subscribe_update::UpdateOneof,
 };
 
@@ -96,22 +96,22 @@ async fn process_yellowstone_endpoint(
     let (mut subscribe_tx, mut stream) = client.subscribe().await?;
     let commitment: CommitmentLevel = config.commitment.into();
 
-    let mut transactions = HashMap::new();
-    transactions.insert(
+    let mut accounts = HashMap::new();
+    accounts.insert(
         "account".to_string(),
-        SubscribeRequestFilterTransactions {
-            account_include: vec![config.account.clone()],
-            account_exclude: vec![],
-            account_required: vec![],
-            ..Default::default()
+        SubscribeRequestFilterAccounts {
+            account: vec![config.account.clone()],
+            owner: vec![],
+            filters: vec![],
+            nonempty_txn_signature: Some(true),
         },
     );
 
     subscribe_tx
         .send(SubscribeRequest {
             slots: HashMap::default(),
-            accounts: HashMap::default(),
-            transactions,
+            accounts,
+            transactions: HashMap::default(),
             transactions_status: HashMap::default(),
             entry: HashMap::default(),
             blocks: HashMap::default(),
@@ -137,72 +137,63 @@ async fn process_yellowstone_endpoint(
                 match message {
                     Some(Ok(msg)) => {
                         match msg.update_oneof {
-                            Some(UpdateOneof::Transaction(tx_msg)) => {
-                                if let Some(tx) = tx_msg.transaction.as_ref()
-                                    && let Some(msg) = tx.transaction.as_ref().and_then(|t| t.message.as_ref()) {
-                                        let has_account = msg
-                                            .account_keys
-                                            .iter()
-                                            .any(|key| key.as_slice() == account_pubkey.as_ref());
+                            Some(UpdateOneof::Account(account_msg)) => {
+                                let Some(account) = account_msg.account.as_ref() else {
+                                    continue;
+                                };
 
-                                        if has_account {
-                                            let wallclock = get_current_timestamp();
-                                            let elapsed = start_instant.elapsed();
-                                            let signature = match tx.transaction.as_ref()
-                                                .and_then(|t| t.signatures.first()) {
-                                                Some(sig) => bs58::encode(sig).into_string(),
-                                                None => {
-                                                    warn!(endpoint = %endpoint_name, "Missing signature in transaction");
-                                                    continue;
-                                                }
-                                            };
+                                if account.pubkey.as_slice() != account_pubkey.as_ref() {
+                                    continue;
+                                }
 
-                                            if let Some(file) = log_file.as_mut() {
-                                                write_log_entry(file, wallclock, &endpoint_name, &signature)?;
+                                let Some(signature) = account.txn_signature.as_ref() else {
+                                    warn!(endpoint = %endpoint_name, "Missing transaction signature in account update");
+                                    continue;
+                                };
+
+                                let wallclock = get_current_timestamp();
+                                let elapsed = start_instant.elapsed();
+                                let signature = bs58::encode(signature).into_string();
+
+                                if let Some(file) = log_file.as_mut() {
+                                    write_log_entry(file, wallclock, &endpoint_name, &signature)?;
+                                }
+
+                                let tx_data = TransactionData {
+                                    wallclock_secs: wallclock,
+                                    elapsed_since_start: elapsed,
+                                    start_wallclock_secs,
+                                };
+
+                                let updated = accumulator.record(signature.clone(), tx_data.clone());
+
+                                if updated
+                                    && let Some(envelope) = build_signature_envelope(
+                                        &comparator,
+                                        &endpoint_name,
+                                        &signature,
+                                        tx_data,
+                                        total_producers,
+                                    ) {
+                                        if let Some(target) = target_transactions {
+                                            let shared = shared_counter.fetch_add(1, Ordering::AcqRel) + 1;
+                                            if let Some(tracker) = progress.as_ref() {
+                                                tracker.record(shared);
                                             }
+                                            if shared >= target
+                                                && !shared_shutdown.swap(true, Ordering::AcqRel)
+                                            {
+                                                info!(endpoint = %endpoint_name, target, "Reached shared signature target; broadcasting shutdown");
+                                                let _ = shutdown_tx.send(());
+                                            }
+                                        }
 
-                                            let tx_data = TransactionData {
-                                                wallclock_secs: wallclock,
-                                                elapsed_since_start: elapsed,
-                                                start_wallclock_secs,
-                                            };
-
-                                            let updated = accumulator.record(
-                                                signature.clone(),
-                                                tx_data.clone(),
-                                            );
-
-                                            if updated
-                                                && let Some(envelope) = build_signature_envelope(
-                                                    &comparator,
-                                                    &endpoint_name,
-                                                    &signature,
-                                                    tx_data,
-                                                    total_producers,
-                                                ) {
-                                                    if let Some(target) = target_transactions {
-                                                        let shared = shared_counter
-                                                            .fetch_add(1, Ordering::AcqRel)
-                                                            + 1;
-                                                        if let Some(tracker) = progress.as_ref() {
-                                                            tracker.record(shared);
-                                                        }
-                                                        if shared >= target
-                                                            && !shared_shutdown.swap(true, Ordering::AcqRel)
-                                                        {
-                                                            info!(endpoint = %endpoint_name, target, "Reached shared signature target; broadcasting shutdown");
-                                                            let _ = shutdown_tx.send(());
-                                                        }
-                                                    }
-
-                                                    if let Some(sender) = signature_sender.as_ref() {
-                                                        enqueue_signature(sender, &endpoint_name, &signature, envelope);
-                                                    }
-                                                }
-
-                                            transaction_count += 1;
+                                        if let Some(sender) = signature_sender.as_ref() {
+                                            enqueue_signature(sender, &endpoint_name, &signature, envelope);
                                         }
                                     }
+
+                                transaction_count += 1;
                             },
                             Some(UpdateOneof::Ping(_)) => {
                                 subscribe_tx
